@@ -351,6 +351,459 @@ bot.onChannelJoin(async (handler, event) => {
 }
 ```
 
+### `onInteractionResponse` - Interactive Button Handler
+
+**When it fires:** User clicks a button or submits a form in an interactive message
+
+**Full Payload:**
+```typescript
+{
+  ...basePayload,
+  response: DecryptedInteractionResponse  // Contains form/button data
+}
+```
+
+**Interactive messages** allow you to create buttons, forms, and other UI elements that users can interact with. When a user clicks a button or submits a form, the `onInteractionResponse` handler is triggered.
+
+### Sending Interactive Requests (Buttons, Forms, Transactions)
+
+**⚠️ BREAKING CHANGE - SDK 408+:** The `sendInteractionRequest` API changed in SDK 408. Any SDK below 408 will not send interaction requests correctly.
+
+**NEW FORMAT (SDK 408+):**
+```typescript
+import { hexToBytes } from 'viem'
+
+// Send interactive form with buttons
+await handler.sendInteractionRequest(
+  channelId,
+  {
+    case: "form",
+    value: {
+      id: "tier-selection-form",
+      title: "Select Battle Tier",
+      subtitle: "Choose which tier to stake your Degen in:",
+      components: [
+        {
+          id: "tier-0",
+          component: {
+            case: "button",
+            value: { label: "Low Tier - 1 $TOWNS" },
+          },
+        },
+        {
+          id: "tier-1",
+          component: {
+            case: "button",
+            value: { label: "Medium Tier - 2 $TOWNS" },
+          },
+        },
+        {
+          id: "tier-2",
+          component: {
+            case: "button",
+            value: { label: "Large Tier - 3 $TOWNS" },
+          },
+        },
+      ],
+    },
+  },
+  hexToBytes(userId as `0x${string}`)  // recipient is now the 3rd parameter
+)
+```
+
+**OLD FORMAT (SDK < 408) - DO NOT USE:**
+```typescript
+// ❌ This format no longer works in SDK 408+
+await handler.sendInteractionRequest(channelId, {
+  recipient: hexToBytes(userId as `0x${string}`),  // recipient was inside the object
+  content: {
+    case: "form",
+    value: { /* ... */ }
+  }
+})
+```
+
+**Key Changes:**
+- `recipient` parameter moved from inside the object to the 3rd parameter
+- Interaction requests are now encrypted for security
+- Update to SDK 408+ and adjust all `sendInteractionRequest` calls
+
+**Use Case - Button Click Handling:**
+```typescript
+bot.onInteractionResponse(async (handler, event) => {
+  const { response } = event
+  
+  // Check if it's a form response (buttons are sent as forms)
+  if (response.payload.content?.case !== "form") {
+    return
+  }
+  
+  const formResponse = response.payload.content?.value
+  
+  // Loop through all components to find which button was clicked
+  for (const component of formResponse.components) {
+    if (component.component.case === "button") {
+      const componentId = component.id
+      
+      // Route to different handlers based on button ID
+      if (componentId === "confirm-button") {
+        await handler.sendMessage(
+          event.channelId,
+          "You confirmed the action!"
+        )
+      } else if (componentId === "cancel-button") {
+        await handler.sendMessage(
+          event.channelId,
+          "Action cancelled."
+        )
+      }
+    }
+  }
+})
+```
+
+**Pattern - Game with Interactive Buttons:**
+```typescript
+import { hexToBytes } from 'viem'
+
+// Store game state
+const gameStates = new Map()
+
+bot.onSlashCommand("play", async (handler, event) => {
+  // Initialize game state
+  gameStates.set(event.userId, {
+    score: 0,
+    health: 100,
+    channelId: event.channelId
+  })
+  
+  // Send interactive buttons to the user
+  await handler.sendInteractionRequest(
+    event.channelId,
+    {
+      case: "form",
+      value: {
+        id: "game-actions-form",
+        title: "🎮 Your turn!",
+        subtitle: "What do you do?",
+        components: [
+          {
+            id: "attack-button",
+            component: {
+              case: "button",
+              value: { label: "⚔️ Attack" },
+            },
+          },
+          {
+            id: "defend-button",
+            component: {
+              case: "button",
+              value: { label: "🛡️ Defend" },
+            },
+          },
+        ],
+      },
+    },
+    hexToBytes(event.userId as `0x${string}`)
+  )
+})
+
+bot.onInteractionResponse(async (handler, event) => {
+  const { response } = event
+  
+  if (response.payload.content?.case !== "form") {
+    return
+  }
+  
+  const formResponse = response.payload.content?.value
+  const gameState = gameStates.get(event.userId)
+  
+  if (!gameState) {
+    await handler.sendMessage(event.channelId, "No active game. Use /play to start!")
+    return
+  }
+  
+  // Handle button clicks
+  for (const component of formResponse.components) {
+    if (component.component.case === "button") {
+      const buttonId = component.id
+      
+      if (buttonId === "attack-button") {
+        gameState.score += 10
+        await handler.sendMessage(
+          event.channelId,
+          `⚔️ You attacked! Score: ${gameState.score}`
+        )
+      } else if (buttonId === "defend-button") {
+        gameState.health += 5
+        await handler.sendMessage(
+          event.channelId,
+          `🛡️ You defended! Health: ${gameState.health}`
+        )
+      }
+      
+      gameStates.set(event.userId, gameState)
+    }
+  }
+})
+```
+
+**Pattern - Re-using Command Handlers with Buttons:**
+```typescript
+// Define your command handlers as separate functions
+async function handleHit(handler: any, event: any) {
+  const gameState = gameStates.get(event.userId)
+  // ... hit logic
+  await handler.sendMessage(event.channelId, "You hit!")
+}
+
+async function handleStand(handler: any, event: any) {
+  const gameState = gameStates.get(event.userId)
+  // ... stand logic
+  await handler.sendMessage(event.channelId, "You stand!")
+}
+
+// Register slash commands
+bot.onSlashCommand("hit", handleHit)
+bot.onSlashCommand("stand", handleStand)
+
+// Handle button clicks by routing to the same handlers
+bot.onInteractionResponse(async (handler, event) => {
+  const { response } = event
+  
+  if (response.payload.content?.case !== "form") {
+    return
+  }
+  
+  const formResponse = response.payload.content?.value
+  
+  for (const component of formResponse.components) {
+    if (component.component.case === "button") {
+      const componentId = component.id
+      
+      // Create a clean event object for the handler
+      const cleanEvent = {
+        userId: event.userId,
+        channelId: event.channelId,
+        eventId: event.eventId,
+        spaceId: event.spaceId,
+        createdAt: event.createdAt,
+        command: "",
+        args: [],
+        mentions: [],
+        replyId: undefined,
+        threadId: undefined,
+      }
+      
+      // Route button clicks to command handlers
+      if (componentId === "hit-button") {
+        cleanEvent.command = "hit"
+        await handleHit(handler, cleanEvent)
+      } else if (componentId === "stand-button") {
+        cleanEvent.command = "stand"
+        await handleStand(handler, cleanEvent)
+      }
+    }
+  }
+})
+```
+
+**Important Notes:**
+- Button IDs must be unique and match between your message creation and response handling
+- Interactive messages enable rich user experiences (games, polls, confirmations, etc.)
+- Store game/form state externally (database or in-memory) to maintain context
+- Always validate that `response.payload.content?.case === "form"` before processing
+
+## Utility Functions
+
+### Getting Smart Account Address from User ID
+
+The bot SDK provides a utility to convert a user's Towns ID to their smart account (wallet) address:
+
+```typescript
+import { getSmartAccountFromUserId } from "@towns-protocol/bot"
+
+bot.onMessage(async (handler, event) => {
+  // Get user's smart account (wallet) address
+  // userId comes from bot.onMessage, onSlashCommand, onTip, or other event listeners
+  const walletAddress = await getSmartAccountFromUserId(bot, { userId: event.userId })
+  
+  console.log(`User ${event.userId} has wallet address: ${walletAddress}`)
+  
+  // Use for Web3 operations
+  await handler.sendMessage(
+    event.channelId,
+    `Your wallet address is: ${walletAddress}`
+  )
+})
+```
+
+**Usage Examples:**
+
+```typescript
+// From slash command
+bot.onSlashCommand("wallet", async (handler, event) => {
+  const walletAddress = await getSmartAccountFromUserId(bot, { userId: event.userId })
+  await handler.sendMessage(event.channelId, `Your wallet: ${walletAddress}`)
+})
+
+// From tip event
+bot.onTip(async (handler, event) => {
+  const senderWallet = await getSmartAccountFromUserId(bot, { userId: event.userId })
+  console.log(`Tip from wallet: ${senderWallet}`)
+})
+
+// For mentioned users
+bot.onMessage(async (handler, event) => {
+  if (event.mentions.length > 0) {
+    const firstMentionWallet = await getSmartAccountFromUserId(bot, { 
+      userId: event.mentions[0].userId 
+    })
+    await handler.sendMessage(
+      event.channelId,
+      `${event.mentions[0].displayName}'s wallet: ${firstMentionWallet}`
+    )
+  }
+})
+```
+
+**Use Cases:**
+- Send tokens/NFTs to a user's smart account
+- Check user's on-chain balance or assets
+- Execute contract calls on behalf of users
+- Verify ownership of on-chain assets
+- Airdrop rewards to community members
+
+## Bot Wallet Architecture & Funding
+
+**CRITICAL:** Towns Protocol bots use a dual-wallet architecture. Understanding this is essential for troubleshooting "insufficient funds" or "not enough gas" errors.
+
+### The Two Addresses
+
+Every bot has **TWO different blockchain addresses**:
+
+#### 1. **Bot Wallet (EOA)** - `bot.botId` / `bot.viem.account.address`
+- **Type:** Externally Owned Account (regular wallet)
+- **Role:** Signs transactions to authorize operations
+- **Derived from:** Your `APP_PRIVATE_DATA` credentials
+- **Funding:** ❌ **NOT required** - This wallet just signs, doesn't pay
+
+#### 2. **App Contract (Smart Account)** - `bot.appAddress`
+- **Type:** SimpleAccount smart contract (ERC-4337)
+- **Role:** Executes transactions and pays for everything
+- **Deployed on:** Blockchain when bot is created
+- **Funding:** ✅ **REQUIRED** - This pays gas and holds bot's funds
+
+### How It Works
+
+```
+User Action → Bot receives event
+     ↓
+Bot Wallet (EOA at bot.botId) SIGNS transaction
+     ↓
+App Contract (Smart Account at bot.appAddress) EXECUTES & PAYS
+     ↓
+Transaction completes (gas paid from bot.appAddress balance)
+```
+
+### When You Need to Fund `bot.appAddress`
+
+You **MUST** fund `bot.appAddress` if your bot:
+- ✅ Sends tips or transfers tokens to users
+- ✅ Executes any smart contract transactions
+- ✅ Distributes prizes or payments
+- ✅ Performs any on-chain write operations (using `execute()` or `writeContract()`)
+
+You **DON'T** need funding for:
+- ❌ Sending messages in Towns (free)
+- ❌ Reading from smart contracts (no gas cost)
+- ❌ Reacting to messages (free)
+- ❌ Slash commands (free)
+
+### How to Check and Fund Your Bot
+
+**Check balances:**
+```typescript
+import { formatEther } from 'viem'
+
+// Check App Contract balance (CRITICAL - this needs funding!)
+const appBalance = await bot.viem.getBalance({ 
+  address: bot.appAddress 
+})
+console.log(`App Contract: ${bot.appAddress}`)
+console.log(`Balance: ${formatEther(appBalance)} ETH`)
+
+// Check Bot Wallet balance (just for reference)
+const botWalletBalance = await bot.viem.getBalance({ 
+  address: bot.viem.account.address 
+})
+console.log(`Bot Wallet: ${bot.viem.account.address}`)
+console.log(`Balance: ${formatEther(botWalletBalance)} ETH`)
+```
+
+**Fund your bot:**
+Simply send ETH/tokens to `bot.appAddress` from any wallet (MetaMask, exchange, etc.)
+
+**Example balance check command:**
+```typescript
+bot.onSlashCommand("balance", async (handler, { channelId }) => {
+  const appBalance = await bot.viem.getBalance({ 
+    address: bot.appAddress 
+  })
+  
+  await handler.sendMessage(channelId,
+`💰 **Bot Balance**
+
+App Contract (pays for operations): ${formatEther(appBalance)} ETH
+Address: \`${bot.appAddress}\`
+
+${appBalance === 0n ? '⚠️ **CRITICAL:** Bot needs funding to execute transactions!' : '✅ Bot is funded and ready'}`)
+})
+```
+
+### Common Errors and Solutions
+
+#### Error: "insufficient funds for gas * price + value"
+**Cause:** `bot.appAddress` doesn't have enough ETH to pay for gas
+**Solution:** Send ETH to `bot.appAddress`
+
+#### Error: "sender doesn't have enough funds to send tx"
+**Cause:** `bot.appAddress` balance is too low for the transaction
+**Solution:** Send more ETH to `bot.appAddress`
+
+#### Error: "execution reverted" (when sending payments)
+**Cause:** `bot.appAddress` doesn't have enough balance to send the payment amount + gas
+**Solution:** Ensure `bot.appAddress` has enough ETH for both the payment and gas fees
+
+### Checking Which Address Tips Go To
+
+Tips can be received by either address. Check both in your tip handler:
+
+```typescript
+bot.onTip(async (handler, event) => {
+  console.log('Tip receiver:', event.receiverAddress)
+  console.log('Bot ID:', bot.botId)
+  console.log('App Address:', bot.appAddress)
+  
+  const isForBot = event.receiverAddress === bot.botId || 
+                   event.receiverAddress === bot.appAddress
+  
+  if (isForBot) {
+    // Handle tip...
+  }
+})
+```
+
+**Best Practice:** Check for both addresses since users might tip either one.
+
+### Key Takeaways
+
+1. **`bot.appAddress`** = Where you send funds (the smart contract that executes transactions)
+2. **`bot.botId`** = Bot's identity (the EOA that signs transactions)
+3. **All on-chain operations execute from and pay gas from `bot.appAddress`**
+4. **Monitor `bot.appAddress` balance to avoid "insufficient funds" errors**
+5. **Tips can go to either address - check both in your handlers**
+
 ## Handler Combination Patterns
 
 ### Pattern 1: Contextual Responses
@@ -501,8 +954,6 @@ await handler.sendMessage(
     }>,
     attachments?: Array<    // Add attachments (see Sending Attachments section)
       | { type: 'image', url: string, alt?: string }
-      | { type: 'link', url: string }
-      | { type: 'chunked', data: Blob | Uint8Array, filename: string, ... }
     >
   }
 )
@@ -524,7 +975,7 @@ await handler.sendReaction(
 
 ## Sending Attachments
 
-The bot framework supports three types of attachments with automatic validation and encryption.
+The bot framework supports two types of attachments with automatic validation and encryption.
 
 ### Image Attachments from URLs
 
@@ -589,46 +1040,6 @@ bot.onSlashCommand("weather", async (handler, event) => {
 - Invalid URLs (404, network errors) are gracefully skipped - message still sends
 - URL images are fetched synchronously during `sendMessage`
 - Multiple URL attachments are processed sequentially
-
-### Link Attachments 
-
-Use `type: 'link'` to send link attachments. 
-
-**This is the recommended way to share miniapps, frames, and any web content.**
-
-```typescript
-bot.onSlashCommand("share", async (handler, event) => {
-  const url = event.args[0]
-
-  await handler.sendMessage(event.channelId, "Check this out!", {
-    attachments: [
-      {
-        type: 'link',
-        url: url
-      }
-    ]
-  })
-})
-```
-
-**Multiple Link Attachments:**
-```typescript
-// Share multiple links in one message
-await handler.sendMessage(event.channelId, "Resources:", {
-  attachments: [
-    { type: 'link', url: 'https://example.com/miniapp' },
-    { type: 'link', url: 'https://docs.towns.com' },
-    { type: 'link', url: 'https://github.com/townsprotocol' }
-  ]
-})
-```
-
-**Important Notes:**
-- If the URL doesn't have Open Graph metadata, title/description will be extracted from standard HTML meta tags
-- Invalid URLs or fetch failures are handled gracefully (attachment is skipped, message still sends)
-- **This is the preferred method for sharing miniapps and frames**
-- You can send multiple link attachments in a single message
-- All attachments are end-to-end encrypted automatically
 
 ### Chunked Media Attachments (Binary Data)
 
@@ -709,13 +1120,9 @@ bot.onSlashCommand("screenshot", async (handler, { channelId }) => {
 
 **Mixed Attachments Example:**
 ```typescript
-// Combine links, images, and chunked media
+// Combine URL images with chunked media
 await handler.sendMessage(channelId, "Product comparison:", {
   attachments: [
-    {
-      type: 'link',
-      url: 'https://example.com/product-page'
-    },
     {
       type: 'image',
       url: 'https://example.com/product-a.jpg',
@@ -1509,6 +1916,36 @@ bot.onMessage(() => counter++)
 const db = new Database()
 bot.onMessage(() => db.increment('counter'))
 ```
+
+### Issue: Transaction fails with "insufficient funds" or "not enough gas"
+
+**Common Errors:**
+- `insufficient funds for gas * price + value`
+- `sender doesn't have enough funds to send tx`
+- `execution reverted` (when sending payments)
+
+**Solution:** Your bot's **App Contract** (`bot.appAddress`) needs ETH funding!
+
+**Quick Fix:**
+1. Check which address needs funding:
+```typescript
+console.log('Fund this address:', bot.appAddress)
+const balance = await bot.viem.getBalance({ address: bot.appAddress })
+console.log('Current balance:', formatEther(balance), 'ETH')
+```
+
+2. Send ETH to `bot.appAddress` from MetaMask or any wallet
+
+3. Verify funding:
+```typescript
+const newBalance = await bot.viem.getBalance({ address: bot.appAddress })
+console.log('New balance:', formatEther(newBalance), 'ETH')
+```
+
+**Important:** 
+- Fund `bot.appAddress` (the smart contract), NOT `bot.botId` (the signer)
+- See [Bot Wallet Architecture & Funding](#bot-wallet-architecture--funding) section for full details
+
 ### Issue: Can't mention users
 
 **Format:**
@@ -1541,18 +1978,18 @@ REDIS_URL=redis://...
 ### Development Setup
 ```bash
 # 1. Install dependencies
-bun install
+yarn install
 
 # 2. Create .env file
 cp .env.sample .env
 # Edit .env with your credentials
 
 # 3. Build and run
-bun build
-bun start
+yarn build
+yarn start
 
 # 4. For development with hot reload
-bun dev
+yarn dev
 ```
 
 
@@ -1570,11 +2007,12 @@ bun dev
 
 ```bash
 # Development
-bun dev               # Start with hot reload
-bun build             # Build for production
-bun start             # Run production build
-bun lint              # Check code quality
-bun typecheck         # Verify types
+yarn dev                # Start with hot reload
+yarn build             # Build for production
+yarn start             # Run production build
+yarn test              # Run tests
+yarn lint              # Check code quality
+yarn typecheck         # Verify types
 ```
 
 ## Summary for AI Agents
