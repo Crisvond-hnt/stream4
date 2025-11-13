@@ -8,8 +8,8 @@ const bot = await makeTownsBot(process.env.APP_PRIVATE_DATA!, process.env.JWT_SE
     commands,
 })
 
-// Track users who have paid the $1 tip for SlickRick quotes
-const paidUsers = new Map<string, Date>()
+// Track quote requests waiting for payment (messageId -> userId)
+const pendingQuoteRequests = new Map<string, string>()
 
 // SlickRick quotes collection
 const slickRickQuotes = [
@@ -36,15 +36,15 @@ bot.onSlashCommand('help', async (handler, { channelId }) => {
         '**Available Commands:**\n\n' +
             '• `/help` - Show this help message\n' +
             '• `/time` - Get the current time\n' +
-            '• `/slickrick` - Get a SlickRick quote (tip $1 first!)\n\n' +
+            '• `/slickrick` - Get a SlickRick quote (50¢ per quote!)\n\n' +
             '**Message Triggers:**\n\n' +
             "• Mention me - I'll respond with wisdom\n" +
             "• React with 👋 - I'll wave back\n" +
             '• Say "hello" - I\'ll greet you back\n' +
             '• Say "ping" - I\'ll show latency\n' +
             '• Say "react" - I\'ll add a reaction\n\n' +
-            '**💰 SlickRick Premium Access:**\n' +
-            'Tip me $1 to unlock unlimited SlickRick quotes!',
+            '**💰 SlickRick Pay-Per-Quote:**\n' +
+            'Each quote costs 50¢ - tip the request message to get your wisdom!',
     )
 })
 
@@ -54,48 +54,60 @@ bot.onSlashCommand('time', async (handler, { channelId }) => {
 })
 
 bot.onSlashCommand('slickrick', async (handler, { channelId, userId }) => {
-    // Check if user has paid the $1 tip
-    if (!paidUsers.has(userId)) {
-        await handler.sendMessage(
-            channelId,
-            '🚫 Hold up, fool! You need to tip me $1 first to access SlickRick quotes!\n\n' +
-                '💰 Tip me $1 and unlock unlimited wisdom!\n\n' +
-                'Tip this bot message to get access.',
-        )
-        return
-    }
+    // Send payment request message
+    const requestMessage = await handler.sendMessage(
+        channelId,
+        '💰 **SlickRick Quote Request**\n\n' +
+            '🎤 Tip this message **50¢** (0.00015 ETH) to get your wisdom!\n\n' +
+            '"Get right or get left, fool!"',
+    )
 
-    // User has paid - give them a random quote
-    const randomQuote = slickRickQuotes[Math.floor(Math.random() * slickRickQuotes.length)]
-    await handler.sendMessage(channelId, `🎤 **SlickRick says:**\n\n"${randomQuote}"`)
+    // Track this request
+    pendingQuoteRequests.set(requestMessage.eventId, userId)
 })
 
-// Handle tips to unlock SlickRick quotes
-bot.onTip(async (handler, { channelId, userId, receiverAddress, amount }) => {
+// Handle tips for SlickRick quotes
+bot.onTip(async (handler, { channelId, userId, receiverAddress, amount, messageId }) => {
     // Check if the tip is for the bot
     const isForBot = receiverAddress === bot.botId || receiverAddress === bot.appAddress
 
     if (!isForBot) return
 
-    // Convert tip amount to ETH
-    const tipAmount = parseFloat(formatEther(amount))
+    // Check if this tip is for a quote request
+    const requestUserId = pendingQuoteRequests.get(messageId)
 
-    // Check if tip is at least $1 worth (assuming 1 ETH = $3000, $1 = ~0.00033 ETH)
-    // For simplicity, we'll accept any tip >= 0.0003 ETH (~$1)
-    if (tipAmount >= 0.0003) {
-        paidUsers.set(userId, new Date())
+    if (requestUserId) {
+        // Convert tip amount to ETH
+        const tipAmount = parseFloat(formatEther(amount))
 
-        await handler.sendMessage(
-            channelId,
-            `💰 Thank you for the ${tipAmount.toFixed(4)} ETH tip!\n\n` +
-                '✅ You now have **unlimited access** to SlickRick quotes!\n\n' +
-                'Use `/slickrick` anytime to get your wisdom, fool! 🎤',
-        )
+        // Check if tip is at least 50¢ worth (assuming 1 ETH = $3000, 50¢ = ~0.00015 ETH)
+        if (tipAmount >= 0.00015) {
+            // Payment accepted - send a random quote
+            const randomQuote = slickRickQuotes[Math.floor(Math.random() * slickRickQuotes.length)]
+
+            await handler.sendMessage(
+                channelId,
+                `💰 Payment received: ${tipAmount.toFixed(5)} ETH\n\n` +
+                    `🎤 **SlickRick says:**\n\n"${randomQuote}"\n\n` +
+                    '💸 Want another? Run `/slickrick` again!',
+            )
+
+            // Remove the pending request
+            pendingQuoteRequests.delete(messageId)
+        } else {
+            await handler.sendMessage(
+                channelId,
+                `🙏 Thanks for the tip, but you need at least 50¢ (0.00015 ETH) for a quote!\n\n` +
+                    `You sent: ${tipAmount.toFixed(6)} ETH`,
+            )
+        }
     } else {
+        // General tip, not for a quote
+        const tipAmount = parseFloat(formatEther(amount))
         await handler.sendMessage(
             channelId,
-            `🙏 Thanks for the tip, but you need at least $1 worth (0.0003 ETH) to unlock SlickRick quotes!\n\n` +
-                `You sent: ${tipAmount.toFixed(6)} ETH`,
+            `💰 Thanks for the ${tipAmount.toFixed(5)} ETH tip, fool!\n\n` +
+                '🎤 Want a SlickRick quote? Use `/slickrick` and tip 50¢!',
         )
     }
 })

@@ -11,7 +11,7 @@ const commands = [
     },
     {
         name: 'slickrick',
-        description: 'Get a SlickRick quote (requires $1 tip first)',
+        description: 'Get a SlickRick quote (50¢ per quote)',
     },
 ] as const satisfies PlainMessage<SlashCommand>[]
 
