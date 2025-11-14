@@ -115,7 +115,7 @@ bot.onTip(async (handler, { channelId, userId, receiverAddress, amount, messageI
 bot.onMessage(async (handler, { message, channelId, eventId, createdAt, isMentioned }) => {
     // Check if bot was mentioned
     if (isMentioned) {
-        await handler.sendMessage(channelId, "Whats up fool! Check the AGENTS.md for knowledge 📚")
+        await handler.sendMessage(channelId, "Whats up fool! Wanna py me for quotes")
         return
     }
 
